@@ -6,6 +6,8 @@
 #include <time.h>
 #include <SPIFFS.h>
 #include <FS.h>
+#include <ESP32Ping.h>
+#include "esp_task_wdt.h"
 #define RELAY_PIN 18
 #define RELAY_ON 1
 #define RELAY_OFF 0
@@ -46,14 +48,17 @@ static uint8_t taskCoreOne = 1;
 int relay_Flag = 0;
 int flag_ON_OFF = 0;
 int flag_Send_Post = 0;
+bool flag_SPIFFS = false;
 
 //counts
 int count_ON_OFF;
 int count_Seconds;
 int count_Data_On_SPIFFS_Sucess;
 int count_SPIFFS;
+int count_Lines_False = 0;
+int count_Lines_True = 0;
 
-String myFilePath = "/esquadrejadeira.bin";
+String myFilePath = "/esquadrejadeira.txt";
 
 File file;
 
@@ -78,6 +83,10 @@ void setup()
 
   pinMode(RELAY_PIN, INPUT_PULLUP);
 
+  esp_task_wdt_init(30, true);
+  esp_task_wdt_add(NULL);
+  disableCore0WDT();
+
   WiFi.begin(ssid, password);
   Serial.println("");
   Serial.println("Conectando");
@@ -100,7 +109,7 @@ void setup()
   if (Get_NTP() == false)
   {
     // Get time from NTP
-    Serial.println("Request Timeout from NTP server");
+    Serial.println("Request timeout com servidor NTP");
   }
 
   // Se não foi possível iniciar o File System, exibimos erro e reiniciamos o ESP
@@ -122,13 +131,16 @@ void setup()
   else
   {
     // Exibimos mensagem
-    Serial.println("File system ok");
+    Serial.println("Sistema de arquivos OK");
   }
 
-  file.close();
+  listAllFiles();
   Serial.println("");
+  
+  //SPIFFS.remove("/esquadrejadeira.bin");
 
   buffer = xQueueCreate(10, sizeof(uint32_t));  //Cria a queue *buffer* com 10 slots de 4 Bytes  
+  
 
   xTaskCreatePinnedToCore(
     TASK_Check_Relay_Status, /*função que implementa a tarefa */
@@ -163,13 +175,14 @@ void setup()
 
 void TASK_Send_Data_From_SPIFFS(void *p)
 {
+  
   while (true)
   {
     if (count_Lines_SPIFFS() > 0) {
       
     //se tiver conexão com WiFi
     if (WiFi.status() == WL_CONNECTED)
-    {
+    {    
       //se existir o arquivo
       if (SPIFFS.exists(myFilePath))
       {
@@ -187,9 +200,9 @@ void TASK_Send_Data_From_SPIFFS(void *p)
         {
           //enquanto o arquivo estiver disponivel para leitura
           while (file.available())
-          {
+          {                      
             String line = file.readStringUntil('\n');
-            Serial.println(line);
+            //Serial.println(line);
             WiFiClient client;
             HTTPClient http;
             // Especifique o destino para a solicitação HTTP
@@ -202,36 +215,56 @@ void TASK_Send_Data_From_SPIFFS(void *p)
             if (httpResponseCode > 0)
             {
               String response = http.getString(); //Obtém a resposta do request
-              Serial.println("Conexão com o servidor bem sucedida."); //Printa o código do retorno
+              Serial.println("Conexão para reenviar os dados para o servidor bem sucedida."); //Printa o código do retorno
               Serial.println("");
 
               //Se o INSERT no banco não retornar um "OK", salva na memória flash
               if (response != "OK")
               {
-                Serial.println("Não foi possível inserir o dado da SPIFF com sucesso no banco de dados =(");
-
+                Serial.println("Não foi possível reenviar o dado da SPIFF para o banco de dados");
+                Serial.println("");
+                count_Lines_False++;
               }
               else
               {
                 Serial.println("Insert realizado com sucesso!");
+                Serial.println("");
+                count_Lines_True++;
               }
             }
             else
             {
               //Se acontecer algum outro tipo de erro ao enviar o POST
-              Serial.print("Erro ao enviar POST: ");
+              Serial.println("");
+              Serial.print("Erro ao reenviar POST: ");
               Serial.println(httpResponseCode);
-
-            }
+              Serial.println("");
+              count_Lines_False++;              
+            } 
+            flag_SPIFFS = true;            
+          }          
+          file.close();                        
           }
         }
-      }
+      }   
+      else
+      {
+      Serial.println("Não foi possivel se reconectar ao servidor!");
     }
-    else
-    {
-      Serial.println("Não foi possivel se conectar ao servidor!");
-    }
-   }
+    if (count_Lines_True == count_Lines_SPIFFS()) {
+                     
+              Serial.println("Dados serão removidos das SPIFFS.");
+              Serial.println("\n\n---BEFORE REMOVING---");
+              listAllFiles();
+               
+              SPIFFS.remove("/esquadrejadeira.txt");
+               
+              Serial.println("\n\n---AFTER REMOVING---");
+              listAllFiles();
+              count_Lines_True = 0;
+                     
+            }                     
+   }   
   }
 
   vTaskDelay(pdMS_TO_TICKS(50));
@@ -239,6 +272,7 @@ void TASK_Send_Data_From_SPIFFS(void *p)
 
 void TASK_Send_POST(void *p)
 {
+  esp_task_wdt_add(NULL);
   uint32_t rcv = 0;
   while (true)
   {
@@ -249,7 +283,7 @@ void TASK_Send_POST(void *p)
       send_POST();
     }
   }
-
+  esp_task_wdt_reset();
   //vTaskDelay(pdMS_TO_TICKS(50));
 }
 
@@ -270,6 +304,17 @@ void TASK_Check_Relay_Status(void *p)
   }
 
   vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+bool check_Ping() {
+  bool success = Ping.ping("www.google.com", 3);
+ 
+  if(!success){
+    Serial.println("Ping failed");
+    return false;
+  }
+  return true;
+  Serial.println("Ping succesful.");
 }
 
 void wifi_Reconnect()
@@ -298,7 +343,7 @@ uint8_t Get_NTP(void)
   timeval epoch = { 946684800, 0 }; // timeval is a struct: {tv_sec, tv_usec}. Old data for detect no replay from NTP. 1/1/2000    
   settimeofday(&epoch, NULL); // Set internal ESP32 RTC
 
-  Serial.println("Contacting NTP Server");
+  Serial.println("Entrando em contato com o servidor NTP");
   configTime(3600 *timezone, daysavetime *3600, "a.st1.ntp.br", "a.ntp.br", "gps.ntp.br");  // initialize the NTP client 
   // using configTime() function to get date and time from an NTP server.
 
@@ -306,9 +351,10 @@ uint8_t Get_NTP(void)
   {
     // time stamp packet into to a readable format. It takes time structure
     // as a parameter. Second parameter is server replay timeout
-    Serial.println("No replay from NTP server");
+    Serial.println("Sem conexão com servidor NTP");
 
-    return false; // Something went wrong  
+    return false; // Something went wrong
+    ESP.restart();  
   }
 
   Serial.println("NTP server reply");
@@ -322,11 +368,12 @@ int count_Lines_SPIFFS()
 {
   int count = 0;
   String line = "";
+  file = SPIFFS.open(myFilePath, FILE_READ);
   while (file.available())
   {
     // we could open the file, so loop through it to find the record we require
     count++;
-    Serial.println(count);  // show line number of SPIFFS file
+    //Serial.println(count);  // show line number of SPIFFS file
     line = file.readStringUntil('\n');  // Read line by line from the file        
   }
 
@@ -370,12 +417,12 @@ void send_POST()
         file = SPIFFS.open(myFilePath, FILE_APPEND);
         if (file.print(logdata))
         {
-          Serial.println("Message successfully appended");
-          count_SPIFFS++;
+          Serial.println("Mensagem anexada com sucesso!");
+          Serial.println("");          
         }
         else
         {
-          Serial.print("Appending failled!");
+          Serial.print("Falha ao anexar!");
         }
 
         file.close();
@@ -390,12 +437,12 @@ void send_POST()
       file = SPIFFS.open(myFilePath, FILE_APPEND);
       if (file.print(logdata))
       {
-        Serial.println("Message successfully appended");
-        count_SPIFFS++;
+        Serial.println("Mensagem anexada com sucesso!!!");
+        Serial.println("");       
       }
       else
       {
-        Serial.print("Appending failled!");
+        Serial.print("Falha ao anexar!");
       }
 
       file.close();
@@ -408,8 +455,8 @@ void send_POST()
     Serial.println("Salvando dados na memória flash...");
     Serial.println("");
     sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    Serial.println(logdata);
-    count_SPIFFS++;
+    //Serial.println(logdata);
+    
   }
 }
 
