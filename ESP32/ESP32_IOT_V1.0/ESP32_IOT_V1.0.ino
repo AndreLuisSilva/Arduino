@@ -18,8 +18,8 @@
 
 //const char *ssid = "ForSellEscritorio";
 //const char *password = "forsell1010";
-
-const char *ssid = "AndreESP32";
+ 
+const char *ssid = "Andrew";
 const char *password = "teste123";
 
 //const char *ssid = "Andre Wifi";
@@ -83,9 +83,9 @@ void setup()
 
   pinMode(RELAY_PIN, INPUT_PULLUP);
 
-  esp_task_wdt_init(30, true);
-  esp_task_wdt_add(NULL);
-  disableCore0WDT();
+  //esp_task_wdt_init(30, true);
+  //esp_task_wdt_add(NULL);
+  //disableCore0WDT();
 
   WiFi.begin(ssid, password);
   Serial.println("");
@@ -216,7 +216,7 @@ void TASK_Send_Data_From_SPIFFS(void *p)
             {
               String response = http.getString(); //Obtém a resposta do request
               Serial.println("Conexão para reenviar os dados para o servidor bem sucedida."); //Printa o código do retorno
-              Serial.println("");
+              //Serial.println("");
 
               //Se o INSERT no banco não retornar um "OK", salva na memória flash
               if (response != "OK")
@@ -254,12 +254,12 @@ void TASK_Send_Data_From_SPIFFS(void *p)
     if (count_Lines_True == count_Lines_SPIFFS()) {
                      
               Serial.println("Dados serão removidos das SPIFFS.");
-              Serial.println("\n\n---BEFORE REMOVING---");
+              Serial.println("\n\n---Arquivo antes de remoção---");
               listAllFiles();
                
               SPIFFS.remove("/esquadrejadeira.txt");
                
-              Serial.println("\n\n---AFTER REMOVING---");
+              Serial.println("\n\n---Arquivo depois de remoção---");
               listAllFiles();
               count_Lines_True = 0;
                      
@@ -272,7 +272,7 @@ void TASK_Send_Data_From_SPIFFS(void *p)
 
 void TASK_Send_POST(void *p)
 {
-  esp_task_wdt_add(NULL);
+  //esp_task_wdt_add(NULL);
   uint32_t rcv = 0;
   while (true)
   {
@@ -283,7 +283,7 @@ void TASK_Send_POST(void *p)
       send_POST();
     }
   }
-  esp_task_wdt_reset();
+  //esp_task_wdt_reset();
   //vTaskDelay(pdMS_TO_TICKS(50));
 }
 
@@ -357,8 +357,8 @@ uint8_t Get_NTP(void)
     ESP.restart();  
   }
 
-  Serial.println("NTP server reply");
-  Serial.printf("Now: %02d-%02d-%04d %02d:%02d:%02d\n", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  Serial.println("Resposta do servidor NTP");
+  Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   Serial.println("-------------------------");
 
   return true;  // All OK and go away
@@ -407,7 +407,7 @@ void send_POST()
       //Serial.println(httpResponseCode); //Printa o código do retorno
       Serial.println("");
       Serial.println(response); //Printa a resposta do request
-      Serial.println("");
+      //Serial.println("");
 
       //Se o INSERT no banco não retornar um "OK", salva na memória flash.
       if (response != "OK")
@@ -499,17 +499,22 @@ boolean return_Array_State()
 
 void listAllFiles()
 {
-  File root = SPIFFS.open("/");
-
-  File file = root.openNextFile();
-
-  while (file)
-  {
-    Serial.print("FILE: ");
-    Serial.println(file.name());
-
-    file = root.openNextFile();
-  }
+    String linhas = "";
+    // Read file content
+    file = SPIFFS.open(myFilePath, FILE_READ);
+    Serial.println("Conteúdo armazenado: ");    
+    while(file.available()) {
+     linhas = file.readStringUntil('\n');
+     Serial.println(linhas);     
+    //Serial.write(file.read());
+    }
+    Serial.print("Quantidade de linhas: ");
+    Serial.println(count_Lines_SPIFFS());
+    Serial.println("");
+    // Check file size
+    Serial.print("Tamanho do arquivo: ");
+    Serial.println(file.size());
+    file.close();
 }
 
 void check_ON_OFF()
