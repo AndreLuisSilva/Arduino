@@ -122,9 +122,9 @@ void setup()
 
   pinMode(RELAY_PIN, INPUT_PULLUP);
 
-  //esp_task_wdt_init(30, true);
+  esp_task_wdt_init(10, true);
   //esp_task_wdt_add(NULL);
-  //disableCore0WDT();
+  disableCore0WDT();
 
   WiFi.begin(ssid, password);
   Serial.println("");
@@ -178,6 +178,15 @@ void setup()
 
   buffer = xQueueCreate(10, sizeof(uint32_t));  //Cria a queue *buffer* com 10 slots de 4 Bytes   
 
+  //xTaskCreatePinnedToCore(
+  //  watchdog_task, /*função que implementa a tarefa */
+  //  "watchdog_task", /*nome da tarefa */
+  //  10000, /*número de palavras a serem alocadas para uso com a pilha da tarefa */
+  //  NULL, /*parâmetro de entrada para a tarefa (pode ser NULL) */
+  //  1, /*prioridade da tarefa (0 a N) */
+  //  NULL, /*referência para a tarefa (pode ser NULL) */
+  //  taskCoreZero); /*Núcleo que executará a tarefa */
+
   xTaskCreatePinnedToCore(
     TASK_Check_Relay_Status, /*função que implementa a tarefa */
     "TASK_Check_Relay_Status", /*nome da tarefa */
@@ -217,52 +226,68 @@ void setup()
   delay(500); //tempo para a tarefa iniciar 
 }
 
+void watchdog_task(void *pvParameters)
+{ 
+    /* kick watchdog every 1 second */
+    for (;;) {
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+        esp_task_wdt_reset();
+    
+    }
+}
+
 void TASK_Check_Wifi_Status(void *p) 
-{
+{ 
+  esp_task_wdt_add(NULL); //Habilita o monitoramento do Task WDT nesta tarefa
   while(true)
     {
-     
+        esp_task_wdt_reset();
     check_Wifi_Connection();
-
+    vTaskDelay(pdMS_TO_TICKS(1000));    
+    ESP_LOGI("TASK_Check_Wifi_Status", "OK");
   }
-  vTaskDelay(pdMS_TO_TICKS(1000));
+  
+  
 }
 
 
 
 void TASK_Send_Data_From_SPIFFS(void *p)
 {
+    
   while (true)
-  {
+  { 
+      esp_task_wdt_reset();
     send_POST_Again();
-
+    vTaskDelay(pdMS_TO_TICKS(50));      
+    ESP_LOGI("TASK_Send_Data_From_SPIFFS", "OK");
   }
 
-  vTaskDelay(pdMS_TO_TICKS(50));
+  
 }
 
 void TASK_Send_POST(void *p)
-{
-  //esp_task_wdt_add(NULL);
+{ 
+  esp_task_wdt_delete(NULL);
   uint32_t rcv = 0;
   while (true)
-  {
+  {   
     if (buffer == NULL) return;
 
     if (xQueueReceive(buffer, &rcv, portMAX_DELAY) == true) //Se recebeu o valor dentro de 1seg (timeout), mostrara na tela
     {
       send_POST();
     }
-  }
-
-  //esp_task_wdt_reset();
-  //vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(50));    
+  }   
 }
 
 void TASK_Check_Relay_Status(void *p)
 {
+  esp_task_wdt_add(NULL);
   while (true)
-  {
+  {   
+    esp_task_wdt_reset();
     unsigned long current_Millis = millis();
     //Verifica se o intervalo já foi atingido
     if (current_Millis - previous_Millis >= TIME_INTERVAL)
@@ -272,9 +297,11 @@ void TASK_Check_Relay_Status(void *p)
       count_Seconds++;
       check_ON_OFF();
     }
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 
-  vTaskDelay(pdMS_TO_TICKS(50));
+  
+  
 }
 
 void check_Wifi_Connection() {
@@ -822,7 +849,7 @@ void send_POST()
 
     pFile.close();
   }
-  Serial.println("");
+  Serial.println("");    
 }
 
 int return_Relay_State()
