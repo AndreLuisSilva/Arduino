@@ -10,12 +10,15 @@
 #include "esp_task_wdt.h"
 #include <Vector.h>
 #include <Streaming.h>
+#include <SD.h>
+#include <Wire.h>  // para o Modulo RTC I2C
+//#include "RTClib.h"
 
-#define BLUE 23
-#define GREEN 22
-#define RED 21
+#define BLUE 25
+#define GREEN 26
+#define RED 27
 #define PIN_LED 2
-#define RELAY_PIN 18
+#define RELAY_PIN 13
 #define RELAY_ON 1
 #define RELAY_OFF 0
 #define ARRAY_SIZE 60
@@ -57,9 +60,7 @@ unsigned long previous_Millis = 0;
 
 hw_timer_t * timer = NULL; //faz o controle do temporizador (interrupção por tempo)
 
-int vetor[60] = {
-   0
-};
+int vetor[60] = { 0 };
 
 int sizeOfRecord = 80;
 
@@ -83,17 +84,20 @@ bool flag_Valida_Internet = false;
 //counts
 int count_ON_OFF;
 int count_Seconds;
-int count_Data_On_SPIFFS_Sucess;
 int count_SPIFFS = 0;
+int count_Data_On_SPIFFS_Sucess;
 int count_Lines_True = 0;
 int count_Lines = 0;
 
 String myFilePath = "/esquadrejadeira.txt";
+String mySDCardPath = "/data.txt";
 // String que recebe as mensagens de erro
 String errorMsg;
 
 String fileName; // Nome do arquivo
 File pFile; // Ponteiro do arquivo
+
+//RTC_DS3231 rtc;
 
 QueueHandle_t buffer;
 Timestamps ts(3600); // instantiating object of class Timestamp with an time offset of 0 seconds 
@@ -110,12 +114,14 @@ void TASK_Send_POST(void * p);
 void listAllFiles();
 int count_Lines_SPIFFS();
 void send_POST();
+void printDirectory(File dir, int numTabs);
+
 
 // Classe FS_File_Record e suas funções
 class FS_File_Record {
    // Todas as funções desta lib são publicas, mais detalhes em FS_File_Record.cpp
    public:
-      FS_File_Record(String, int);
+   FS_File_Record(String, int);
    FS_File_Record(String);
    bool init();
    bool readFileLastRecord(String * , String * );
@@ -162,22 +168,7 @@ void setup() {
 
    esp_task_wdt_init(80, true);
    esp_task_wdt_add(NULL);
-   disableCore0WDT();
-   //disableCore1WDT();
-
-   //hw_timer_t * timerBegin(uint8_t num, uint16_t divider, bool countUp)
-   /*
-      num: é a ordem do temporizador. Podemos ter quatro temporizadores, então a ordem pode ser [0,1,2,3].
-     divider: É um prescaler (reduz a frequencia por fator). Para fazer um agendador de um segundo, 
-     usaremos o divider como 80 (clock principal do ESP32 é 80MHz). Cada instante será T = 1/(80) = 1us
-     countUp: True o contador será progressivo
-   */
-   //timer = timerBegin(0, 80, true); //timerID 0, div 80
-   //timer, callback, interrupção de borda
-   //timerAttachInterrupt(timer, &resetModule, true);
-   //timer, tempo (us), repetição
-   //timerAlarmWrite(timer, 70000000, true);
-   //timerAlarmEnable(timer); //habilita a interrupção 
+   disableCore0WDT();   
 
    WiFi.begin(ssid, password);
    Serial.println("");
@@ -212,6 +203,8 @@ void setup() {
       ESP.restart();
 
    }
+
+   init_SD_Card();
 
    // Se não foi possível iniciar o File System, exibimos erro e reiniciamos o ESP
    if (!ObjFS.init()) {
@@ -257,6 +250,15 @@ void setup() {
    digitalWrite(BLUE, LOW);
 
    //SPIFFS.remove("/esquadrejadeira.txt");  
+   //SD.remove("/data.txt");  
+
+   //if (!rtc.begin()) {
+   //  Serial.println("Não foi possível encontrar RTC");
+   //  while (1);
+  //}
+  //rtc.adjust(DateTime(__DATE__, __TIME__));
+
+
 
    buffer = xQueueCreate(10, sizeof(uint32_t)); //Cria a queue *buffer* com 10 slots de 4 Bytes  
 
@@ -270,40 +272,40 @@ void setup() {
       taskCoreZero); //Número do core que será executada a tarefa (usamos o core 0 para o loop ficar 
 
    xTaskCreatePinnedToCore(
-      TASK_Check_Relay_Status, /*função que implementa a tarefa */
-      "TASK_Check_Relay_Status", /*nome da tarefa */
-      10000, /*número de palavras a serem alocadas para uso com a pilha da tarefa */
-      NULL, /*parâmetro de entrada para a tarefa (pode ser NULL) */
-      2, /*prioridade da tarefa (0 a N) */
-      NULL, /*referência para a tarefa (pode ser NULL) */
-      taskCoreZero); /*Núcleo que executará a tarefa */
+      TASK_Check_Relay_Status, 
+      "TASK_Check_Relay_Status",
+      10000,
+      NULL, 
+      2, 
+      NULL, 
+      taskCoreZero); 
 
    xTaskCreatePinnedToCore(
-      TASK_Check_Wifi_Status, /*função que implementa a tarefa */
-      "TASK_Check_Wifi_Status", /*nome da tarefa */
-      10000, /*número de palavras a serem alocadas para uso com a pilha da tarefa */
-      NULL, /*parâmetro de entrada para a tarefa (pode ser NULL) */
-      1, /*prioridade da tarefa (0 a N) */
-      NULL, /*referência para a tarefa (pode ser NULL) */
-      taskCoreOne); /*Núcleo que executará a tarefa */
+      TASK_Check_Wifi_Status, 
+      "TASK_Check_Wifi_Status", 
+      10000,
+      NULL, 
+      1, 
+      NULL, 
+      taskCoreOne); 
 
    xTaskCreatePinnedToCore(
-      TASK_Send_POST, /*função que implementa a tarefa */
-      "TASK_Send_POST", /*nome da tarefa */
-      10000, /*número de palavras a serem alocadas para uso com a pilha da tarefa */
-      NULL, /*parâmetro de entrada para a tarefa (pode ser NULL) */
-      2, /*prioridade da tarefa (0 a N) */
-      NULL, /*referência para a tarefa (pode ser NULL) */
-      taskCoreOne); /*Núcleo que executará a tarefa */
+      TASK_Send_POST, 
+      "TASK_Send_POST", 
+      10000, 
+      NULL, 
+      2, 
+      NULL, 
+      taskCoreOne); 
 
    xTaskCreatePinnedToCore(
-      TASK_Send_Data_From_SPIFFS, /*função que implementa a tarefa */
-      "TASK_Send_Data_From_SPIFFS", /*nome da tarefa */
-      10000, /*número de palavras a serem alocadas para uso com a pilha da tarefa */
-      NULL, /*parâmetro de entrada para a tarefa (pode ser NULL) */
-      1, /*prioridade da tarefa (0 a N) */
-      NULL, /*referência para a tarefa (pode ser NULL) */
-      taskCoreOne); /*Núcleo que executará a tarefa */
+      TASK_Send_Data_From_SPIFFS, 
+      "TASK_Send_Data_From_SPIFFS", 
+      10000, 
+      NULL, 
+      1, 
+      NULL, 
+      taskCoreOne); 
 
    delay(500); //tempo para a tarefa iniciar 
 }
@@ -430,22 +432,27 @@ bool validate_Send_POST() {
    } else {
       return false;
    }
-   vTaskDelay(pdMS_TO_TICKS(5000));
+   vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
 void send_POST_Again() {
+   //verifica se existe algum arquivo criado na memoria flash
    if (ObjFS.fileExists()) {
+      //verifica se existe conexão com o wifi
       if (WiFi.status() == WL_CONNECTED) {
+         //verifica se existe conexão com a internet pingando o servidor do google
          if (validate_Send_POST()) {
-
+            //abre o arquivo dentro da SPIFFS para leitura
             File file = SPIFFS.open(myFilePath, FILE_READ);
 
-            String line = "";
+            String line = "";            
 
             while (file.available()) {
+
                int validate_Break_While = 0;
                line = file.readStringUntil('\n');
                validate_Break_While = re_Send_POST(line);
+
                if (validate_Break_While == (count_Lines_SPIFFS() + 1)) {
                   count_SPIFFS = 0;
                   listAllFiles();
@@ -456,6 +463,72 @@ void send_POST_Again() {
          }
       }
    }
+}
+
+void init_SD_Card() {
+
+    Serial.println("\nInicializando o cartão SD...");
+ 
+  // we'll use the initialization code from the utility libraries
+  // since we're just testing if the card is working!
+  if (!SD.begin(SS)) {
+    Serial.println("Falha na inicialização. Verifique se...");
+    Serial.println("* tem um cartão inserido no slot?");
+    Serial.println("* sua fiação está correta?");
+    Serial.println("* você mudou o pino do chip? Selecione o pino correto para funcionar corretamente com o seu shield ou módulo!");
+    while (1);
+  } else {
+    Serial.println("A fiação está OK e um cartão está inserido no slot corretamente.");
+  }
+
+   File file = SD.open("/data.txt");
+  if(!file) {
+    Serial.println("Arquivo ainda não existe");
+    Serial.println("Criando arquivo...");   
+
+   file = SD.open("/data.txt", FILE_APPEND);
+
+   // Se foi possível abrir
+   if (file) {
+      // Escreve registro
+      file.println("on_off, mac_address, data_hora \r\n");           
+   }
+  }
+  else {
+    Serial.println("Arquivo já existe.");  
+  }
+  
+ 
+  // print the type of card
+  Serial.println();
+  Serial.print("Modelo de card: ");
+  switch (SD.cardType()) {
+    case CARD_NONE:
+      Serial.println("Nenhum");
+      break;
+    case CARD_MMC:
+      Serial.println("MMC");
+      break;
+    case CARD_SD:
+      Serial.println("SD");
+      break;
+    case CARD_SDHC:
+      Serial.println("SDHC");
+      break;
+    default:
+      Serial.println("Desconhecido");
+  }  
+ 
+  Serial.print("Tamanho do cartão:  ");
+  Serial.println((float)SD.cardSize()/1000);
+ 
+  Serial.print("Total em bytes: ");
+  Serial.println(SD.totalBytes());
+ 
+  Serial.print("Bytes utilizados: ");
+  Serial.println(SD.usedBytes()); 
+
+  file.close();
 }
 
 /*--- LEITURA DO ARQUIVO ---*/
@@ -703,18 +776,6 @@ int FS_File_Record::getUsedSpace() {
    return SPIFFS.usedBytes();
 }
 
-//bool check_Ping() {
-//  bool success = Ping.ping("www.google.com", 3);
-
-//  if (!success) {
-//    Serial.println("Ping failed");
-//    return false;
-//  }
-
-//  return true;
-//  Serial.println("Ping succesful.");
-//}
-
 void wifi_Reconnect() {
    // Caso retorno da função WiFi.status() seja diferente de WL_CONNECTED
    // entrara na condição de desconexão
@@ -770,39 +831,38 @@ int count_Lines_SPIFFS() {
 }
 
 //Envia POST novamente
-int re_Send_POST(String post) {
-   //Serial.println("Iniciando o reenvio do POST.");
-
-   //Verifique o status da conexão WiFi
-   if (WiFi.status() == WL_CONNECTED) {
-
-      //WiFiClient client;
-      //HTTPClient http;
-
+int re_Send_POST(String post) { 
+   
       // Especifique o destino para a solicitação HTTP
-      http.begin("http://54.207.230.239/site/query_insert_postgres_conexao_madeira_teste.php");
-      //http.begin("http://54.207.230.239/site/query_insert_postgres_conexao_madeira.php");
-      //http.begin("http://54.207.230.239/site/query_insert_CMDados_paradas.php");
+      http.begin("http://54.207.230.239/site/query_insert_postgres_conexao_madeira_teste.php");      
       http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
       int httpResponseCode = http.POST(post); //publica o post
 
       //verifica se foi possivel fazer o insert com post
       if (httpResponseCode > 0) {
-         String response = http.getString(); //Obtém a resposta do request
-         //Serial.println(httpResponseCode); //Printa o código do retorno      
-         //Serial.println(response); //Printa a resposta do request
-         //Serial.println("");
 
-         //Se o INSERT no banco não retornar um "OK", salva na memória flash.
-         if (response != "OK") {
-            //Serial.println("");
-            //Serial.println("Insert não inserido no banco com sucesso =(");
-         } else {
-            //Serial.println("");
-            //Serial.println("Insert realizado com sucesso!");
+         String response = http.getString(); //Obtém a resposta do request         
+
+         //Afim de garantir que todos os inserts no banco de dados ocorram de forma correta, é iniciado a primeira vez o loop de inserção
+         //nesse primeiro momento, as inserções serão somente realizadas e não serão contabilizadas
+         //isso significa que desse modo o sistema vai passar pelo loop ao menos duas vezes para garantir a integridade da inserção de todos os dados
+         //terminando esse loop, ele sai do while e não deleta o arquivo que contém os dados coletados de forma offline 
+         //em seguida ele irá entrar novamente no while, mas dessa vez irá começar a contabilizar as linhas afetadas no banco de dados
+         //cada linha que retornar um 0 significa que já foi inserida no banco e assim incrementasse o contador "count_SPIFFS"
+         //validando que esse dado realmente já foi inserido no banco de dados ao menos uma vez
+         //a SQL de inserção não permite a inserção de dados duplicados e nos retorna o numero de linhas afetadas
+         //se existir alguma linha que ainda não tenha sido inserida, ele irá inserir novamente no banco de dados         
+         //se isso ocorrer ao finalizar o loop ele irá realizar todo o processo novamente, não excluindo o arquivo e entrando no loop novamente
+         //caso o contador de linhas armazenadas na memória flash seja igual ao count_SPIFFS
+         //todas as linhas da SPIFFS já foram inseridas ao menos uma vez no banco e assim validando a exclusão do arquivo
+         
+         if (response.toInt() == 0) {         
+            
             count_SPIFFS++;
-         }
+
+         } 
+
       } else {
          //Se acontecer algum outro tipo de erro ao enviar o POST, salva na memória flash.
          Serial.println("");
@@ -812,13 +872,7 @@ int re_Send_POST(String post) {
       }
 
       http.end();
-   } else {
-      //Se não tiver conexão com o WiFi salva na memória flash
-      Serial.println("");
-      Serial.println("Sem conexão com a rede Wireless!");
-      Serial.println("");
-   }
-
+   
    //Serial.println("");
    return count_SPIFFS;
 }
@@ -828,10 +882,13 @@ void send_POST() {
    Serial.println("");
    struct tm timeinfo;
    getLocalTime( & timeinfo); // Get local time
-   char logdata[150];
+   //aumentar o tamanho do char conforme necessário para o POST
+   char logdata[80];
+   char csv[80];
    //Verifique o status da conexão WiFi
    if (WiFi.status() == WL_CONNECTED) {
-      if (flag_Valida_Internet) {
+
+      if (flag_Valida_Internet) {         
 
          long randNumber = random(999999);
          // Especifique o destino para a solicitação HTTP
@@ -840,6 +897,16 @@ void send_POST() {
          //http.begin("http://54.207.230.239/site/query_insert_CMDados_paradas.php");
          http.addHeader("Content-Type", "application/x-www-form-urlencoded");
          sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         sprintf(csv,"%d,%s,%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         Serial.println(csv);
+         File file = SD.open(mySDCardPath, FILE_APPEND);
+         if (file.print(csv)) 
+               {                  
+                  Serial.println("Mensagem anexada com sucesso no cartão SD!!!");
+               } else {                  
+                  Serial.print("Falha ao anexar no cartão SD!");
+               }
+         file.close();
 
          int httpResponseCode = http.POST(logdata); //publica o post
 
@@ -852,7 +919,7 @@ void send_POST() {
             //Serial.println("");
 
             //Se o INSERT no banco não retornar um "OK", salva na memória flash.
-            if (response != "OK") {
+            if (response.toInt() != 1) {
                Serial.println("Insert não inserido no banco com sucesso =(");
                Serial.println("Salvando dados na memória flash...");
                pFile = SPIFFS.open(myFilePath, FILE_APPEND);
@@ -889,7 +956,7 @@ void send_POST() {
       } else {
          long randNumber = random(999999);
          //Se não tiver conexão com o WiFi salva na memória flash
-         Serial.println("Sem conexão com a rede Wireless!");
+         Serial.println("Sem conexão com a internet!");
          Serial.println("Salvando dados na memória flash...");
          Serial.println("");
          sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
@@ -903,13 +970,32 @@ void send_POST() {
 
          pFile.close();
       }
+      
+   } else {
+      long randNumber = random(999999);
+         //Se não tiver conexão com o WiFi salva na memória flash
+         Serial.println("Sem conexão com a rede!");
+         Serial.println("Salvando dados na memória flash...");
+         Serial.println("");
+         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         pFile = SPIFFS.open(myFilePath, FILE_APPEND);
+         if (pFile.print(logdata)) {
+            Serial.println("Mensagem anexada com sucesso!!!");
+
+         } else {
+            Serial.print("Falha ao anexar!");
+         }
+
+         pFile.close();
+      }
+
       Serial.print("Linhas armazenadas: ");
       Serial.println(count_Lines_SPIFFS());
       Serial.println("");
       vTaskDelay(pdMS_TO_TICKS(100));
       //timerWrite(timer, 0); //reseta o temporizador (alimenta o watchdog) 
    }
-}
+
 
 int return_Relay_State() {
    if (digitalRead(RELAY_PIN) == 1) {
@@ -942,7 +1028,7 @@ void listAllFiles() {
    // Read file content
    File file = SPIFFS.open(myFilePath, FILE_READ);
    Serial.println("");
-   Serial.println("                        *********Conteúdo armazenado*********");
+   Serial.println("                     *********Conteúdo armazenado*********");
    while (file.available()) {
       linhas = file.readStringUntil('\n');
       Serial.println(linhas);
