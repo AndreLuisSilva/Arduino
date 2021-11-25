@@ -12,7 +12,7 @@
 #include <Streaming.h>
 #include <SD.h>
 #include <Wire.h>  // para o Modulo RTC I2C
-//#include "RTClib.h"
+#include "RTClib.h"
 
 #define BLUE 25
 #define GREEN 26
@@ -30,8 +30,8 @@
 //#define MAC_ADDRESS "94:B9:7E:C4:DD:B8"
 //MAC ADDRESS ESP32 TESTE2
 //#define MAC_ADDRESS "B8:F0:09:CD:1B:28"
-//MAC ADDRESS ESP32 AMARELO
-#define MAC_ADDRESS "80:7D:3A:D5:1E:04"
+//MAC ADDRESS ESP32 NOVO
+#define MAC_ADDRESS "7C:9E:BD:F4:BC:A4"
 #define FORMAT_LITTLEFS_IF_FAILED true
 
 //const char *ssid = "ForSellEscritorio";
@@ -97,7 +97,7 @@ String errorMsg;
 String fileName; // Nome do arquivo
 File pFile; // Ponteiro do arquivo
 
-//RTC_DS3231 rtc;
+RTC_DS3231 rtc;
 
 QueueHandle_t buffer;
 Timestamps ts(3600); // instantiating object of class Timestamp with an time offset of 0 seconds 
@@ -115,6 +115,8 @@ void listAllFiles();
 int count_Lines_SPIFFS();
 void send_POST();
 void printDirectory(File dir, int numTabs);
+
+int ano, mes, dia, hora, minuto, segundo;
 
 
 // Classe FS_File_Record e suas funções
@@ -189,22 +191,56 @@ void setup() {
    Serial.println(WiFi.macAddress());
    Serial.println("");
 
-   if (Get_NTP() == false) {
-      // Get time from NTP
-      Serial.println("Timeout na conexão com servidor NTP");
-      delay(500);
-      for (int i = 0; i < 3; i++) {
-         digitalWrite(RED, HIGH);
-         delay(250);
-         digitalWrite(RED, LOW);
-         delay(250);
-      }
-      delay(500);
-      ESP.restart();
-
+   if (!rtc.begin()) {
+     Serial.println("Não foi possível encontrar RTC");
+     while (1);
    }
 
-   init_SD_Card();
+   if (Get_NTP() == false) {
+      // Get time from NTP
+      Serial.println("Timeout na conexão com servidor NTP");      
+      //ESP.restart();
+      Serial.println("Utilizando horario armazenado no RTC: ");
+      DateTime now = rtc.now();      
+      ano = now.year();
+      mes = now.month();
+      dia = now.day();
+      hora = now.hour();
+      minuto = now.minute();
+      segundo = now.second();
+      
+      Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", dia, mes, ano, hora, minuto, segundo);
+      Serial.println("-------------------------");   
+      
+   } else {
+      struct tm timeinfo;
+      getLocalTime( & timeinfo);
+      rtc.adjust(DateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)); 
+      //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+      Serial.println("RTC atualizado pelo servidor NTP.");
+      
+      DateTime now = rtc.now();      
+      ano = now.year();
+      mes = now.month();
+      dia = now.day();
+      hora = now.hour();
+      minuto = now.minute();
+      segundo = now.second();
+      
+      Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", dia, mes, ano, hora, minuto, segundo);
+      Serial.println("-------------------------");   
+   }  
+
+   if (rtc.lostPower()) {
+    Serial.println("RTC lost power, lets set the time!");
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
+
+   //init_SD_Card();
 
    // Se não foi possível iniciar o File System, exibimos erro e reiniciamos o ESP
    if (!ObjFS.init()) {
@@ -251,14 +287,6 @@ void setup() {
 
    //SPIFFS.remove("/esquadrejadeira.txt");  
    //SD.remove("/data.txt");  
-
-   //if (!rtc.begin()) {
-   //  Serial.println("Não foi possível encontrar RTC");
-   //  while (1);
-  //}
-  //rtc.adjust(DateTime(__DATE__, __TIME__));
-
-
 
    buffer = xQueueCreate(10, sizeof(uint32_t)); //Cria a queue *buffer* com 10 slots de 4 Bytes  
 
@@ -791,10 +819,7 @@ void wifi_Reconnect() {
 uint8_t Get_NTP(void) {
    struct tm timeinfo;
 
-   timeval epoch = {
-      946684800,
-      0
-   }; // timeval is a struct: {tv_sec, tv_usec}. Old data for detect no replay from NTP. 1/1/2000    
+   timeval epoch = {946684800, 0}; // timeval is a struct: {tv_sec, tv_usec}. Old data for detect no replay from NTP. 1/1/2000    
    settimeofday( & epoch, NULL); // Set internal ESP32 RTC
 
    Serial.println("Entrando em contato com o servidor NTP");
@@ -880,9 +905,18 @@ int re_Send_POST(String post) {
 void send_POST() {
    Serial.println("Iniciando o envio do POST.");
    Serial.println("");
-   struct tm timeinfo;
-   getLocalTime( & timeinfo); // Get local time
+   //struct tm timeinfo;
+   //getLocalTime( & timeinfo); // Get local time
    //aumentar o tamanho do char conforme necessário para o POST
+
+   DateTime now = rtc.now();      
+   ano = now.year();
+   mes = now.month();
+   dia = now.day();
+   hora = now.hour();
+   minuto = now.minute();
+   segundo = now.second();
+   
    char logdata[80];
    char csv[80];
    //Verifique o status da conexão WiFi
@@ -896,17 +930,20 @@ void send_POST() {
          //http.begin("http://54.207.230.239/site/query_insert_postgres_conexao_madeira.php");
          //http.begin("http://54.207.230.239/site/query_insert_CMDados_paradas.php");
          http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
-         sprintf(csv,"%d,%s,%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         //sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         //sprintf(csv,"%d,%s,%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, ano, mes, dia, hora, minuto, segundo, randNumber);
+         sprintf(csv,"%d,%s,%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, ano, mes, dia, hora, minuto, segundo, randNumber);
          Serial.println(csv);
-         File file = SD.open(mySDCardPath, FILE_APPEND);
-         if (file.print(csv)) 
-               {                  
-                  Serial.println("Mensagem anexada com sucesso no cartão SD!!!");
-               } else {                  
-                  Serial.print("Falha ao anexar no cartão SD!");
-               }
-         file.close();
+         
+         //File file = SD.open(mySDCardPath, FILE_APPEND);
+         //if (file.print(csv)) 
+         //      {                  
+         //         Serial.println("Mensagem anexada com sucesso no cartão SD!!!");
+         //      } else {                  
+         //        Serial.print("Falha ao anexar no cartão SD!");
+         //      }
+         //file.close();
 
          int httpResponseCode = http.POST(logdata); //publica o post
 
@@ -959,7 +996,7 @@ void send_POST() {
          Serial.println("Sem conexão com a internet!");
          Serial.println("Salvando dados na memória flash...");
          Serial.println("");
-         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, ano, mes, dia, hora, minuto, segundo, randNumber);
          pFile = SPIFFS.open(myFilePath, FILE_APPEND);
          if (pFile.print(logdata)) {
             Serial.println("Mensagem anexada com sucesso!!!");
@@ -977,7 +1014,7 @@ void send_POST() {
          Serial.println("Sem conexão com a rede!");
          Serial.println("Salvando dados na memória flash...");
          Serial.println("");
-         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
+         sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, ano, mes, dia, hora, minuto, segundo, randNumber);
          pFile = SPIFFS.open(myFilePath, FILE_APPEND);
          if (pFile.print(logdata)) {
             Serial.println("Mensagem anexada com sucesso!!!");
