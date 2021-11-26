@@ -12,6 +12,7 @@
 #include <Streaming.h>
 #include <SD.h>
 #include <Wire.h>  // para o Modulo RTC I2C
+//#include <DS3231.h>
 #include "RTClib.h"
 
 #define BLUE 25
@@ -89,6 +90,11 @@ int count_Data_On_SPIFFS_Sucess;
 int count_Lines_True = 0;
 int count_Lines = 0;
 
+//Criação de variáveis Globais
+int tempC = 0;
+int tempF = 0;
+int direccion = 0x48;
+
 String myFilePath = "/esquadrejadeira.txt";
 String mySDCardPath = "/data.txt";
 // String que recebe as mensagens de erro
@@ -97,6 +103,7 @@ String errorMsg;
 String fileName; // Nome do arquivo
 File pFile; // Ponteiro do arquivo
 
+//RTClib MyRTC;
 RTC_DS3231 rtc;
 
 QueueHandle_t buffer;
@@ -116,7 +123,12 @@ int count_Lines_SPIFFS();
 void send_POST();
 void printDirectory(File dir, int numTabs);
 
-int ano, mes, dia, hora, minuto, segundo;
+uint16_t ano;
+uint8_t mes;
+uint8_t dia;
+uint8_t hora;
+uint8_t minuto;
+uint8_t segundo;
 
 
 // Classe FS_File_Record e suas funções
@@ -172,8 +184,10 @@ void setup() {
    esp_task_wdt_add(NULL);
    disableCore0WDT();   
 
+   Serial.println(""); 
+   Serial.println(""); 
    WiFi.begin(ssid, password);
-   Serial.println("");
+   Serial.println("---------------------------------------"); 
    Serial.print("Conectando a rede ");
    Serial.println(ssid);
    while (WiFi.status() != WL_CONNECTED) {
@@ -182,29 +196,33 @@ void setup() {
    }
 
    Serial.println("");
-   Serial.println("");
+   Serial.println("---------------------------------------"); 
    Serial.print("Conectado à rede WiFi: ");
    Serial.println(ssid);
    Serial.print("Endereço IP: ");
    Serial.println(WiFi.localIP());
    Serial.print("MAC ADDRESS: ");
-   Serial.println(WiFi.macAddress());
-   Serial.println("");
+   Serial.println(WiFi.macAddress());   
 
-   if (!rtc.begin()) {
-     Serial.println("Não foi possível encontrar RTC");
-     while (1);
-   }
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    while (1);
+  }
+
+  Serial.println("---------------------------------------"); 
 
    if (Get_NTP() == false) {
       // Get time from NTP
       Serial.println("Timeout na conexão com servidor NTP");      
       //ESP.restart();
-      Serial.println("Utilizando horario armazenado no RTC: ");
+      Serial.println("Utilizando horario armazenado no RTC: ");      
+
+      //rtc.setClockMode(false);
       DateTime now = rtc.now();      
-      ano = now.year();
-      mes = now.month();
+
       dia = now.day();
+      mes = now.month();
+      ano = now.year();
       hora = now.hour();
       minuto = now.minute();
       segundo = now.second();
@@ -214,33 +232,28 @@ void setup() {
       
    } else {
       struct tm timeinfo;
-      getLocalTime( & timeinfo);
-      rtc.adjust(DateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)); 
-      //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-      Serial.println("RTC atualizado pelo servidor NTP.");
-      
-      DateTime now = rtc.now();      
-      ano = now.year();
-      mes = now.month();
-      dia = now.day();
-      hora = now.hour();
-      minuto = now.minute();
-      segundo = now.second();
+      getLocalTime( & timeinfo);  
+
+      dia = timeinfo.tm_mday;
+      mes = timeinfo.tm_mon + 1;
+      ano = timeinfo.tm_year + 1900;
+      hora = timeinfo.tm_hour;
+      minuto = timeinfo.tm_min;
+      segundo = timeinfo.tm_sec;     
+    
+      Serial.println("RTC atualizado pelo servidor NTP.");     
+       
+      rtc.adjust(DateTime(ano, mes, dia, hora, minuto, segundo));      
       
       Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", dia, mes, ano, hora, minuto, segundo);
-      Serial.println("-------------------------");   
-   }  
+      Serial.println("---------------------------------------");  
+   }     
 
-   if (rtc.lostPower()) {
-    Serial.println("RTC lost power, lets set the time!");
-    // following line sets the RTC to the date & time this sketch was compiled
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    // This line sets the RTC with an explicit date & time, for example to set
-    // January 21, 2014 at 3am you would call:
-    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
-  }
+    return_Temp();
 
-   //init_SD_Card();
+    Serial.println("---------------------------------------");
+    
+   init_SD_Card();
 
    // Se não foi possível iniciar o File System, exibimos erro e reiniciamos o ESP
    if (!ObjFS.init()) {
@@ -256,10 +269,7 @@ void setup() {
       }
       delay(500);
       ESP.restart();
-   }
-
-   // Exibimos mensagem
-   Serial.println("Sistema de arquivos ok");
+   }   
 
    // Se o arquivo não existe, criamos o arquivo
    if (!ObjFS.fileExists()) {
@@ -275,6 +285,11 @@ void setup() {
       ObjFS.newFile(); // Cria o arquivo  
 
    }
+
+   // Exibimos mensagem
+   Serial.println("---------------------------------------"); 
+   Serial.println("SPIFFS Ok!");
+   Serial.println("---------------------------------------"); 
 
    //readFile(myFilePath);
    digitalWrite(BLUE, HIGH);
@@ -344,14 +359,14 @@ void TASK_Check_Internet(void * p) {
    TickType_t taskDelay = 1000 / portTICK_PERIOD_MS;
 
    while (true) {
-      if (count_Seconds == 50) {
+      if (count_Seconds == 54) {
          //Se tem internet
          IPAddress ip(8, 8, 8, 8);
          bool connected = Ping.ping(ip, 3);
          if (connected) {
-            Serial.println("");
-            Serial.println("Conectado com sucesso a internet!!");
-            Serial.println("");
+            //Serial.println("");
+            //Serial.println("Conectado com sucesso a internet!!");
+            //Serial.println("");
             flag_Valida_Internet = true;
          } else {
             Serial.println("");
@@ -427,6 +442,13 @@ void TASK_Check_Relay_Status(void * p) {
 
 }
 
+void return_Temp() {
+   float tempC = rtc.getTemp1();
+   Serial.print("Temperatura atual: ");    
+   Serial.print(tempC);
+   Serial.println("ºC");   
+}
+
 void check_Wifi_Connection() {
 
    if (WiFi.status() == WL_CONNECTED) {
@@ -495,7 +517,7 @@ void send_POST_Again() {
 
 void init_SD_Card() {
 
-    Serial.println("\nInicializando o cartão SD...");
+    Serial.println("Inicializando o cartão SD...");
  
   // we'll use the initialization code from the utility libraries
   // since we're just testing if the card is working!
@@ -506,7 +528,7 @@ void init_SD_Card() {
     Serial.println("* você mudou o pino do chip? Selecione o pino correto para funcionar corretamente com o seu shield ou módulo!");
     while (1);
   } else {
-    Serial.println("A fiação está OK e um cartão está inserido no slot corretamente.");
+    Serial.println("Cartão inserido no slot corretamente.");
   }
 
    File file = SD.open("/data.txt");
@@ -835,9 +857,9 @@ uint8_t Get_NTP(void) {
       ESP.restart();
    }
 
-   Serial.println("Resposta do servidor NTP");
-   Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-   Serial.println("-------------------------");
+   //Serial.println("Resposta do servidor NTP");
+   //Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+   //Serial.println("-------------------------");
    return true; // All OK and go away
 }
 
@@ -903,28 +925,29 @@ int re_Send_POST(String post) {
 }
 
 void send_POST() {
-   Serial.println("Iniciando o envio do POST.");
-   Serial.println("");
+   Serial.println("Iniciando o envio do POST.");   
    //struct tm timeinfo;
    //getLocalTime( & timeinfo); // Get local time
-   //aumentar o tamanho do char conforme necessário para o POST
+   //aumentar o tamanho do char conforme necessário para o POST   
 
-   DateTime now = rtc.now();      
-   ano = now.year();
-   mes = now.month();
-   dia = now.day();
-   hora = now.hour();
-   minuto = now.minute();
-   segundo = now.second();
+    //rtc.setClockMode(false);
+    DateTime now = rtc.now();      
+
+    dia = now.day();
+    mes = now.month();
+    ano = now.year();
+    hora = now.hour();
+    minuto = now.minute();
+    segundo = now.second();
+    long randNumber = random(999999);
    
    char logdata[80];
    char csv[80];
    //Verifique o status da conexão WiFi
    if (WiFi.status() == WL_CONNECTED) {
 
-      if (flag_Valida_Internet) {         
-
-         long randNumber = random(999999);
+      if (flag_Valida_Internet) { 
+                 
          // Especifique o destino para a solicitação HTTP
          http.begin("http://54.207.230.239/site/query_insert_postgres_conexao_madeira_teste.php");
          //http.begin("http://54.207.230.239/site/query_insert_postgres_conexao_madeira.php");
@@ -934,16 +957,19 @@ void send_POST() {
          //sprintf(csv,"%d,%s,%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, randNumber);
          sprintf(logdata, "on_off=%d&mac_address=%s&data_hora=%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, ano, mes, dia, hora, minuto, segundo, randNumber);
          sprintf(csv,"%d,%s,%04d-%02d-%02d %02d:%02d:%02d.%ld\n", flag_ON_OFF, MAC_ADDRESS, ano, mes, dia, hora, minuto, segundo, randNumber);
-         Serial.println(csv);
-         
-         //File file = SD.open(mySDCardPath, FILE_APPEND);
-         //if (file.print(csv)) 
-         //      {                  
-         //         Serial.println("Mensagem anexada com sucesso no cartão SD!!!");
-         //      } else {                  
-         //        Serial.print("Falha ao anexar no cartão SD!");
-         //      }
-         //file.close();
+         Serial.print("String enviada: ");
+         Serial.print(csv);
+         Serial.println("--------------------------------------------------------------"); 
+         File file = SD.open(mySDCardPath, FILE_APPEND);
+         if (file.print(csv)) 
+               {                  
+                  Serial.println("Mensagem anexada com sucesso no cartão SD!!!");
+               } else {                  
+                 Serial.print("Falha ao anexar no cartão SD!");
+               }
+         file.close();  
+
+         Serial.println("--------------------------------------------------------------"); 
 
          int httpResponseCode = http.POST(logdata); //publica o post
 
@@ -969,10 +995,8 @@ void send_POST() {
                }
 
                pFile.close();
-            } else {
-               Serial.println("");
+            } else {               
                Serial.println("Insert realizado com sucesso!");
-
             }
          } else {
             //Se acontecer algum outro tipo de erro ao enviar o POST, salva na memória flash.
@@ -991,7 +1015,7 @@ void send_POST() {
          }
          //flag_Valida_Internet = false;
       } else {
-         long randNumber = random(999999);
+         
          //Se não tiver conexão com o WiFi salva na memória flash
          Serial.println("Sem conexão com a internet!");
          Serial.println("Salvando dados na memória flash...");
@@ -1009,7 +1033,7 @@ void send_POST() {
       }
       
    } else {
-      long randNumber = random(999999);
+      
          //Se não tiver conexão com o WiFi salva na memória flash
          Serial.println("Sem conexão com a rede!");
          Serial.println("Salvando dados na memória flash...");
@@ -1028,7 +1052,7 @@ void send_POST() {
 
       Serial.print("Linhas armazenadas: ");
       Serial.println(count_Lines_SPIFFS());
-      Serial.println("");
+      Serial.println("--------------------------------------------------------------"); 
       vTaskDelay(pdMS_TO_TICKS(100));
       //timerWrite(timer, 0); //reseta o temporizador (alimenta o watchdog) 
    }
@@ -1096,7 +1120,7 @@ void check_ON_OFF() {
    } else if (count_Seconds > ARRAY_SIZE) {
       count_Seconds = 0;
 
-      Serial.println("");
+      Serial.println("--------------------------------------------------------------"); 
       Serial.print("Estado do rele ");
       if (return_Array_State() == true) {
          Serial.println("Ligado");
@@ -1114,8 +1138,10 @@ void check_ON_OFF() {
 
       //zerar contadores de tempo
       count_ON_OFF = 0;
-      //enviar POST
-      //send_POST();
+      //imprime na serial a temperatura
+      Serial.println("--------------------------------------------------------------"); 
+      return_Temp();
+      Serial.println("--------------------------------------------------------------"); 
       xQueueSend(buffer, & snd, pdMS_TO_TICKS(0));
       //Serial.println("");
    }
