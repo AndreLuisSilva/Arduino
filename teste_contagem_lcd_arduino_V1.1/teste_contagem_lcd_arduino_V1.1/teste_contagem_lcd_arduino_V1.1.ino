@@ -148,22 +148,48 @@ void loop()
 
 void menu_Entrada_Manual()
 {
-    menu_return = !menu_return;  
-  
-    lcd.setCursor(0, 2);
-    lcd.print("Entrada Manual: ");
-    lcd.setCursor(15, 2);
-    lcd.print(inputString);
-    validar_Entrada_Manual = true;
-    menu_return = false;
+//    menu_return = !menu_return;  
+//  
+//    lcd.setCursor(0, 2);
+//    lcd.print("Entrada Manual: ");
+//    lcd.setCursor(15, 2);
+//    lcd.print(inputString);
+//    validar_Entrada_Manual = true;
+//    menu_return = false;
+//
+//    if(menu_return)
+//    {
+//      lcd.clear();
+//      split_Number(count);
+//      validar_Entrada_Manual = false;
+//      inputString = "";
+//
+//    }
 
-    if(menu_return)
+  if(menu_return)
     {
+      //lcd.clear();
+      lcd.setCursor(0, 2);
+      lcd.print("Entrada Manual: ");
+      lcd.setCursor(15, 2);
+      lcd.print(inputString);
+      validar_Entrada_Manual = true; 
+          
+    }
+          
+    else if(!menu_return)
+    {
+      if(inputString != "")
+      {
+        //menu_Enviar("");
+      }
+      else
+      {
       lcd.clear();
       split_Number(count);
       validar_Entrada_Manual = false;
       inputString = "";
-
+      }      
     }
     
   }
@@ -325,15 +351,15 @@ void get_Keypad_Buttons()
     switch (key)
     {
       case 'A':
-        menu_Enviar("Capa");
+        menu_Enviar("CA");
         break;
 
       case 'B':
-        menu_Enviar("Miolo");
+        menu_Enviar("MI");
         break;
 
       case 'C':
-        menu_Enviar("Retalho");
+        menu_Enviar("RE");
         break;
 
       case 'D':
@@ -381,6 +407,7 @@ void get_Keypad_Buttons()
         break;
         
       case '*':
+      menu_return = !menu_return;
       menu_Entrada_Manual();
       break;
 
