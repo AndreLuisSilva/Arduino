@@ -3,15 +3,22 @@
 #include <Wire.h>
 #include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
-#include <Bounce2.h>
+#include <SPIFFS.h>
+#include <Timestamps.h>
+#include <sys/time.h>
+#include <time.h>
+#include "RTClib.h"                         
+
 #include "nvs_flash.h"  
 #include "esp_task_wdt.h"
 
+#define MAC_ADDRESS "B8:27:EB:B0:21:80"
 #define SENSOR 18
 #define RESET_BUTTON 5
 #define CHAVE_NVS  ""
-#define RXD2 16
-#define TXD2 17
+
+const char *ssid = "ForSellEscritorio";
+const char *password = "forsell1010";
 
 const byte ROWS = 4;  //quatro linhas
 const byte COLS = 4;  //quatro colunas
@@ -46,8 +53,22 @@ int value;
 int menu_num = 1;
 int sub_menu = 1;
 
+long time1;
+
+uint16_t ano;
+uint8_t mes;
+uint8_t dia;
+uint8_t hora;
+uint8_t minuto;
+uint8_t segundo;
+
 String inputString;
 long inputInt;
+
+String myFilePath = "/count.txt";
+
+long timezone = -3;
+byte daysavetime = 0; // Daylight saving time (horario de verão)
 
 //Protótipos
 void get_Keypad_Buttons();
@@ -63,47 +84,42 @@ void IRAM_ATTR funcao_ISR();
 void TASK_Check_Reset_Button(void *p);
 
 //Objetos
-Bounce debouncer = Bounce();
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 WiFiClient client;
 HTTPClient http;
+File pFile;      // Ponteiro do arquivo
+RTC_DS3231 rtc;
 
 void setup()
 {
-  Serial.begin(115200); 
-  le_dado_nvs();
-  lcd.init();
-  lcd.backlight();
-  //lcd.setCursor(0, 0);
-  //lcd.print("COUNT: ");
-  //lcd.setCursor(7, 0);
-  //lcd.print(count);
+  Serial.begin(9600); 
+  //Wire.setClock(10000);
 
-  split_Number(count);
+  time1 = millis();
   
-  lcd.createChar(0, LT);
-  lcd.createChar(1, UB);
-  lcd.createChar(2, RT);
-  lcd.createChar(3, LL);
-  lcd.createChar(4, LB);
-  lcd.createChar(5, LR);
-  lcd.createChar(6, UMB);
-  lcd.createChar(7, LMB);
+//  le_dado_nvs();
+//  lcd.init();
+//  lcd.backlight();  
+//  split_Number(count);  
+//  lcd.createChar(0, LT);
+//  lcd.createChar(1, UB);
+//  lcd.createChar(2, RT);
+//  lcd.createChar(3, LL);
+//  lcd.createChar(4, LB);
+//  lcd.createChar(5, LR);
+//  lcd.createChar(6, UMB);
+//  lcd.createChar(7, LMB);
   
   pinMode(SENSOR, INPUT_PULLUP);
-  pinMode(RESET_BUTTON, INPUT);
-  //attachInterrupt(RESET_BUTTON, funcao_ISR, RISING);
+  pinMode(RESET_BUTTON, INPUT);     
 
-  //debouncer.attach(RESET_BUTTON); // Informa que o tratamento de debouce será feito no pino 4;
-  //debouncer.interval(100); // Seta o intervalo de trepidação;
-
-  Serial.println("");
-  Serial.println("");  
+  //check_wifi();
+  //check_RTC();
 
    esp_task_wdt_init(10, true);
-  //esp_task_wdt_add(NULL);
-  disableCore0WDT();
+   //esp_task_wdt_add(NULL);
+   disableCore0WDT();
 
   xTaskCreatePinnedToCore(
       TASK_Check_Reset_Button,   /*função que implementa a tarefa */
@@ -112,192 +128,172 @@ void setup()
       NULL,                      /*parâmetro de entrada para a tarefa (pode ser NULL) */
       1,                         /*prioridade da tarefa (0 a N) */
       NULL,                      /*referência para a tarefa (pode ser NULL) */
-      1);             /*Núcleo que executará a tarefa */
+      1);                        /*Núcleo que executará a tarefa */
 
+  xTaskCreatePinnedToCore(
+      TASK_LCD_Begin,            /*função que implementa a tarefa */
+      "TASK_LCD_Begin",          /*nome da tarefa */
+      10000,                     /*número de palavras a serem alocadas para uso com a pilha da tarefa */
+      NULL,                      /*parâmetro de entrada para a tarefa (pode ser NULL) */
+      2,                         /*prioridade da tarefa (0 a N) */
+      NULL,                      /*referência para a tarefa (pode ser NULL) */
+      1);      
 
 }
 
 void TASK_Check_Reset_Button(void *p)
 {
-  /* kick watchdog every 1 second */
+  /* Botão de reset do sistema */
   for (;;)
-  {
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+  {    
     if(digitalRead(RESET_BUTTON)== HIGH)
     {
         ESP.restart();  
     }
+    
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    
+  }
+}
+
+void TASK_LCD_Begin(void *p)
+{
+  /* Reseta o LCD */
+  for (;;)
+  {    
+    if(millis() - time1 > 1000)
+    {
+      time1 = millis();
+      //Wire.setClock(10000);
+      lcd.init();
+      lcd.backlight(); 
+      lcd.clear(); 
+      split_Number(count);  
+      lcd.createChar(0, LT);
+      lcd.createChar(1, UB);
+      lcd.createChar(2, RT);
+      lcd.createChar(3, LL);
+      lcd.createChar(4, LB);
+      lcd.createChar(5, LR);
+      lcd.createChar(6, UMB);
+      lcd.createChar(7, LMB);
+    } 
+       
+    vTaskDelay(250 / portTICK_PERIOD_MS);
+    
   }
 }
 
 void loop()
 {
-  get_Keypad_Buttons();
+  get_Keypad_Buttons();  
 
-  debouncer.update(); // Executa o algorítimo de tratamento;
-  value = debouncer.read(); // Lê o valor tratado do botão;  
-
+ if(validar_Entrada_Manual == false)
+ {
   if (value == HIGH)
   {
     b_high = true;
   }
 
   count_Sensor();
-
+ }
 }
 
 void menu_Entrada_Manual()
 {
-//    menu_return = !menu_return;  
-//  
-//    lcd.setCursor(0, 2);
-//    lcd.print("Entrada Manual: ");
-//    lcd.setCursor(15, 2);
-//    lcd.print(inputString);
-//    validar_Entrada_Manual = true;
-//    menu_return = false;
-//
-//    if(menu_return)
-//    {
-//      lcd.clear();
-//      split_Number(count);
-//      validar_Entrada_Manual = false;
-//      inputString = "";
-//
-//    }
 
-  if(menu_return)
-    {
-      //lcd.clear();
-      lcd.setCursor(0, 2);
-      lcd.print("Entrada Manual: ");
-      lcd.setCursor(15, 2);
+  if(menu_return == true)
+    {  
+      //Wire.setClock(10000); 
+      lcd.clear();   
+      lcd.setCursor(0, 1);
+      lcd.print("ENTRADA MANUAL: ");
+      lcd.setCursor(15, 1);
       lcd.print(inputString);
-      validar_Entrada_Manual = true; 
-          
+      validar_Entrada_Manual = true;           
     }
-          
-    else if(!menu_return)
+              
+    else if(menu_return == false)
     {
       if(inputString != "")
       {
         //menu_Enviar("");
       }
+      
       else
       {
+      //Wire.setClock(10000);
       lcd.clear();
       split_Number(count);
       validar_Entrada_Manual = false;
       inputString = "";
       }      
     }
-    
-  }
+}
   
 void menu_Voltar()
-{
+{ 
+  //Wire.setClock(10000);
   lcd.clear();
-  //lcd.setCursor(0, 0);
-  //lcd.print("COUNT: ");
-  //lcd.setCursor(7, 0);
-  //lcd.print(count);
-  split_Number(count);
-  validar_Entrada_Manual = false;
   inputString = "";
-
+  count = 0;
+  split_Number(count);
+  menu_Entrada_Manual(); 
+   
 }
 
 void menu_Enviar(String value)
 {
-  //if ((value == LOW) && (count > 0) && (b_high == true))
-  //if (count > 0)
-  //{ 
-
   if (validar_Entrada_Manual && inputString != "")
   {
+    //Wire.setClock(10000);
     lcd.setCursor(0, 2);
     lcd.print("");
-    
-    //Serial.print("COUNT: ");
-    Serial.print("M");
+    //Serial.print("M");
     Serial.print(inputString);    
     Serial.println(value);
-    b_high = false;
-    //validate_Serial_Send = false;
-    //Serial.println(count);
+    b_high = false;    
+    lcd.clear();    
+    split_Number(count);      
+    //send_POST('M', inputString.toInt());
     count = 0;
     inputString = "";
-    grava_dado_nvs(count);
-    lcd.clear();
-    //lcd.setCursor(0, 0);
-    //lcd.print("COUNT: ");
-    //lcd.setCursor(7, 0);
-    //lcd.print(count);
-    split_Number(count);
-    delay(150);
-
+    grava_dado_nvs(count);  
+    validar_Entrada_Manual = false;  
+    menu_Entrada_Manual();
+    delay(150);  
   }
   else if (count > 0 && !validar_Entrada_Manual)
   {
+    //Wire.setClock(10000);
     lcd.setCursor(0, 2);
-    lcd.print("");
-   
-    //Serial.print("COUNT: ");
-    Serial.print("S");    
+    lcd.print("");    
+    //Serial.print("S");    
     Serial.print(count);
     Serial.println(value);
-    b_high = false;
-    //validate_Serial_Send = false;
-    //Serial.println(count);
+    b_high = false;    
+    //send_POST('S', count);
     count = 0;
     inputString = "";
     grava_dado_nvs(count);
-    lcd.clear();
-    //lcd.setCursor(0, 0);
-    //lcd.print("COUNT: ");
-    //lcd.setCursor(7, 0);
-    //lcd.print(count);
+    lcd.clear();    
     split_Number(count);
-    delay(150);
+    //validar_Entrada_Manual = true;      
+    delay(150);    
   }
   else
   {
-    invalida_Enviar_Serial();
+    //menu_Reset_LCD();
   }
-
-  validar_Entrada_Manual = false;
-  inputString = "";
-
-}
-
-void invalida_Enviar_Serial()
-{
-  //Serial.println("ERRO, string vazia!");
-  lcd.clear();
-  lcd.setCursor(2, 0);
-  //lcd.print("FALHA AO ENVIAR!");
-  lcd.setCursor(3, 1);
-  //lcd.print("Nao e possivel");
-  lcd.setCursor(5, 2);
-  //lcd.print("enviar uma");
-  lcd.setCursor(4, 3);
-  //lcd.print("string vazia!");
-  //delay(2000);
-  lcd.clear();
-  menu_Reset_LCD();
 }
 
 void menu_Reset_LCD()
 {
   count = 0;
   inputString = "";
-  validar_Entrada_Manual = false;
+  //validar_Entrada_Manual = false;
   grava_dado_nvs(count);
-  lcd.clear();  // Limpa o display
-  //lcd.setCursor(0, 0);
-  //lcd.print("COUNT: ");
-  //lcd.setCursor(7, 0);
-  //lcd.print(count);
+  lcd.clear();  // Limpa o display  
   split_Number(count);
 }
 
@@ -310,18 +306,12 @@ void count_Sensor()
 
   if (!digitalRead(SENSOR) && s_high == true)
   {
+    //Wire.setClock(10000);
     s_high = false;
     count++;
-    //Serial.println(count);       
-
-    lcd.clear();  // Limpa o display
-    //lcd.setCursor(0, 0);
-    //lcd.print("COUNT: ");
-    //lcd.setCursor(7, 0);
-    //lcd.print(count);
+    lcd.clear();  // Limpa o display   
     split_Number(count);
-    grava_dado_nvs(count);    
-    
+    grava_dado_nvs(count);      
     delay(150);
   }
 }
@@ -351,15 +341,23 @@ void get_Keypad_Buttons()
     switch (key)
     {
       case 'A':
-        menu_Enviar("CA");
+      if(count != 0 || inputString != "")
+      {
+        menu_Enviar("CAPA");
+      }        
         break;
 
       case 'B':
-        menu_Enviar("MI");
+      if(count != 0 || inputString != "")
+      {
+        menu_Enviar("ENCHIMENTO");
+      }      
         break;
-
       case 'C':
-        menu_Enviar("RE");
+      if(count != 0 || inputString != "")
+      {
+        menu_Enviar("MIOLO");
+      }      
         break;
 
       case 'D':
@@ -413,7 +411,7 @@ void get_Keypad_Buttons()
 
       case '#':
       menu_Voltar();
-      menu_Reset_LCD();
+      //menu_Reset_LCD();
       break;
     }
   }
@@ -496,103 +494,105 @@ uint32_t le_dado_nvs()
 
 void custom0()//Seleciona os segmentos para formar o numero 0
 {
-  lcd.setCursor(x, 0); //Seleciona a linha superior
+  lcd.setCursor(x, 1); //Seleciona a linha superior
   lcd.write((byte)0);  //Segmento 0 selecionado
   lcd.write(1);  //Segmento 1 selecionado
   lcd.write(2);
-  lcd.setCursor(x, 1); //Seleciona a linha inferior
+  lcd.setCursor(x, 2); //Seleciona a linha inferior
   lcd.write(3);
   lcd.write(4);
   lcd.write(5);
+  
 }
 void custom1() //Seleciona os segmentos para formar o numero 1
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write(1);
   lcd.write(2);
-  lcd.setCursor(x + 1, 1);
+  lcd.setCursor(x + 1, 2);
   lcd.write(5);
 }
 void custom2() //Seleciona os segmentos para formar o numero 2
-{
-  lcd.setCursor(x, 0);
+{  
+  lcd.setCursor(x, 1);
   lcd.write(6);
   lcd.write(6);
   lcd.write(2);
-  lcd.setCursor(x, 1);
+  lcd.setCursor(x, 2);
   lcd.write(3);
   lcd.write(7);
   lcd.write(7);
 }
 void custom3()  //Seleciona os segmentos para formar o numero 3
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write(6);
   lcd.write(6);
   lcd.write(2);
-  lcd.setCursor(x, 1);
+  lcd.setCursor(x, 2);
   lcd.write(7);
   lcd.write(7);
   lcd.write(5);
+  
 }
 void custom4()  //Seleciona os segmentos para formar o numero 4
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write(3);
   lcd.write(4);
   lcd.write(2);
-  lcd.setCursor(x + 2, 1);
+  lcd.setCursor(x + 2, 2);
   lcd.write(5);
 }
 void custom5()  //Seleciona os segmentos para formar o numero 5
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write((byte)0);
   lcd.write(6);
   lcd.write(6);
-  lcd.setCursor(x, 1);
+  lcd.setCursor(x, 2);
   lcd.write(7);
   lcd.write(7);
   lcd.write(5);
 }
 void custom6()  //Seleciona os segmentos para formar o numero 6
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write((byte)0);
   lcd.write(6);
   lcd.write(6);
-  lcd.setCursor(x, 1);
+  lcd.setCursor(x, 2);
   lcd.write(3);
   lcd.write(7);
   lcd.write(5);
 }
 void custom7() //Seleciona os segmentos para formar o numero 7
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write(1);
   lcd.write(1);
   lcd.write(2);
-  lcd.setCursor(x + 1, 1);
+  lcd.setCursor(x + 1, 2);
   lcd.write((byte)0);
 }
 void custom8()  //Seleciona os segmentos para formar o numero 8
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write((byte)0);
   lcd.write((byte)6);
   lcd.write(2);
-  lcd.setCursor(x, 1);
+  lcd.setCursor(x, 2);
   lcd.write(3);
   lcd.write(7);
   lcd.write(5);
 }
 void custom9()  //Seleciona os segmentos para formar o numero 9
 {
-  lcd.setCursor(x, 0);
+  lcd.setCursor(x, 1);
   lcd.write((byte)0);
   lcd.write((byte)6);
   lcd.write((byte)2);
-  lcd.setCursor(x + 2, 1);
+  lcd.setCursor(x + 2, 2);
   lcd.write((byte)5);
 }
 void mostranumero() //Mostra o numero na posicao definida por "X"
@@ -705,10 +705,177 @@ void split_Number(int value)
   
 }
 
-/* Função ISR (chamada quando há geração da
-interrupção) */
-void IRAM_ATTR funcao_ISR()
+void send_POST(char tipo_entrada, int count)
 {
-        delayMicroseconds(1000000);
-        ESP.restart();  
+  //Serial.println("Iniciando o envio do POST.");
+
+  char logdata[150];
+  //Verifique o status da conexão WiFi
+  if (WiFi.status() == WL_CONNECTED)  {
+    
+    HTTPClient http;
+    
+    // Especifique o destino para a solicitação HTTP
+    http.begin("http://192.168.1.127/php/query_insert_count.php");
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded"); 
+    //http.addHeader("Connection", "close");    
+    DateTime now = rtc.now();      
+    dia = now.day();
+    mes = now.month();
+    ano = now.year();
+    hora = now.hour();
+    minuto = now.minute();
+    segundo = now.second();
+    long randNumber = random(999999);
+    char myData[150];
+    sprintf(myData, "%04d-%02d-%02d %02d:%02d:%02d.%ld", ano, mes, dia, hora, minuto, segundo, randNumber);
+    char *myItem = (char *)malloc(strlen(myData) + 1);
+    strcpy(myItem, myData);   
+    sprintf(logdata, "on_off=1&mac_address=%s&tipo_entrada=%c&data_hora=%s&contagem=%d\n", MAC_ADDRESS, tipo_entrada, myItem, count);
+    
+    
+    int httpResponseCode = http.POST(logdata); //publica o post
+    //Serial.print("http code: ");
+    //Serial.println(httpResponseCode);
+    
+    //verifica se foi possível fazer o insert com post
+    if (httpResponseCode > 0)
+    {
+      String response = http.getString(); //Obtém a resposta do request
+      Serial.println(response);
+
+      if (response.toInt() != 1) {
+               Serial.println("Insert não inserido no banco com sucesso =(");
+               Serial.println("Salvando dados na memória flash...");
+               pFile = SPIFFS.open(myFilePath, FILE_APPEND);
+               if (pFile.print(logdata)) {
+                  Serial.println("");
+                  Serial.println("Mensagem anexada com sucesso!!!");
+               } else {
+                  Serial.println("");
+                  Serial.print("Falha ao anexar!");
+               }
+
+               pFile.close();
+            } else {               
+               Serial.println("Insert realizado com sucesso!");
+            }
+      //Se o INSERT no banco não retornar um "OK", salva na memória flash.      
+    }    
+    
+  }
+  Serial.println("");
+}
+
+uint8_t Get_NTP(void) 
+{
+   struct tm timeinfo;
+
+   timeval epoch = {946684800, 0}; // timeval is a struct: {tv_sec, tv_usec}. Old data for detect no replay from NTP. 1/1/2000    
+   settimeofday( & epoch, NULL); // Set internal ESP32 RTC
+
+   Serial.println("Entrando em contato com o servidor NTP");
+   configTime(3600 * timezone, daysavetime * 3600, "a.st1.ntp.br", "a.ntp.br", "gps.ntp.br"); // initialize the NTP client 
+   // using configTime() function to get date and time from an NTP server.
+
+   if (getLocalTime( & timeinfo, 1000) == 0) // transmits a request packet to a NTP server and parse the received 
+   {
+      // time stamp packet into to a readable format. It takes time structure
+      // as a parameter. Second parameter is server replay timeout
+      Serial.println("Sem conexão com servidor NTP");
+      return false; // Something went wrong
+      ESP.restart();
+   }
+
+   Serial.println("Resposta do servidor NTP");
+   Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+   //Serial.println("-------------------------");
+   return true; // All OK and go away
+}
+
+void check_RTC()
+{
+  if (!rtc.begin()) {
+    Serial.println("Não foi possivel encontrar o RTC!");
+    lcd.clear();
+    lcd.setCursor(0, 2);
+    lcd.print("Falha ao ler RTC!");
+    delay(3000);
+    ESP.restart();
+  }
+
+  if (Get_NTP() == false) {
+      // Get time from NTP
+      Serial.println("Timeout na conexão com servidor NTP");      
+      //ESP.restart();
+      Serial.println("Utilizando horario armazenado no RTC: ");      
+
+      //rtc.setClockMode(false);
+      DateTime now = rtc.now();      
+
+      dia = now.day();
+      mes = now.month();
+      ano = now.year();
+      hora = now.hour();
+      minuto = now.minute();
+      segundo = now.second();
+      
+      Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", dia, mes, ano, hora, minuto, segundo);
+      Serial.println("----------------------------------------"); 
+      
+   } else {
+      struct tm timeinfo;
+      getLocalTime( & timeinfo);  
+
+      dia = timeinfo.tm_mday;
+      mes = timeinfo.tm_mon + 1;
+      ano = timeinfo.tm_year + 1900;
+      hora = timeinfo.tm_hour;
+      minuto = timeinfo.tm_min;
+      segundo = timeinfo.tm_sec;     
+    
+      Serial.println("RTC atualizado pelo servidor NTP.");     
+       
+      rtc.adjust(DateTime(ano, mes, dia, hora, minuto, segundo));      
+      
+      Serial.printf("Agora: %02d-%02d-%04d %02d:%02d:%02d\n", dia, mes, ano, hora, minuto, segundo);
+      Serial.println("----------------------------------------"); 
+   }     
+
+    return_Temp();
+
+    Serial.println("----------------------------------------"); 
+}
+
+void return_Temp() 
+{
+   float tempC = rtc.getTemp1();
+   float temp = rtc.getTemperature();
+   Serial.print("Temperatura atual: ");    
+   Serial.print(tempC, 1);
+   Serial.println("ºC");       
+}
+
+void check_wifi()
+{
+  Serial.println(""); 
+   Serial.println(""); 
+   WiFi.begin(ssid, password);
+   Serial.println("----------------------------------------");  
+   Serial.print("Conectando a rede ");
+   Serial.println(ssid);
+   while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+   }
+
+   Serial.println("");
+   Serial.println("----------------------------------------");  
+   Serial.print("Conectado à rede WiFi: ");
+   Serial.println(ssid);
+   Serial.print("Endereço IP: ");
+   Serial.println(WiFi.localIP());
+   Serial.print("MAC ADDRESS: ");
+   Serial.println(WiFi.macAddress());   
+   Serial.println("----------------------------------------"); 
 }
