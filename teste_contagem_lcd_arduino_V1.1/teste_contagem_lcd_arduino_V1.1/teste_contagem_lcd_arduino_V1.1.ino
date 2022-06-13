@@ -12,10 +12,15 @@
 #include "nvs_flash.h"  
 #include "esp_task_wdt.h"
 
-#define MAC_ADDRESS "B8:27:EB:B0:21:80"
+//#define MAC_ADDRESS "7C:9E:BD:F5:69:18"
+//MAC ADDRESS FORMARTEC
+#define MAC_ADDRESS "7C:9E:BD:66:6E:8C"
+//#define MAC_ADDRESS "7C:9E:BD:F4:BC:A4"
 #define SENSOR 18
-#define RESET_BUTTON 5
+//#define RESET_BUTTON 5
 #define CHAVE_NVS  ""
+#define TEMPO 60000
+#define DELAY 50
 
 const char *ssid = "ForSellEscritorio";
 const char *password = "forsell1010";
@@ -36,8 +41,10 @@ bool s_high = 0;
 bool b_high = 0;
 bool menu_return = false;
 bool validar_Entrada_Manual = false;
+bool insert_count = false;
 int count = 0;
 int x = 10, numero;
+bool semafaro_menu;
 
 //Arrays para criação dos segmentos e customização dos números
 byte LT[8]  = {B01111,  B11111,  B11111,  B11111,  B11111,  B11111,  B11111,  B11111};
@@ -48,12 +55,14 @@ byte LB[8]  = {B00000,  B00000,  B00000,  B00000,  B00000,  B11111,  B11111,  B1
 byte LR[8]  = {B11111,  B11111,  B11111,  B11111,  B11111,  B11111,  B11111,  B11110};
 byte UMB[8] = {B11111,  B11111,  B11111,  B00000,  B00000,  B00000,  B11111,  B11111};
 byte LMB[8] = {B11111,  B00000,  B00000,  B00000,  B00000,  B11111,  B11111,  B11111};
+byte CLE[8] = {B00000,  B00000,  B00000,  B00000,  B00000,  B00000,  B00000,  B00000};
 
 int value;
 int menu_num = 1;
 int sub_menu = 1;
 
-long time1;
+long time_Serial;
+long time_Loop;
 
 uint16_t ano;
 uint8_t mes;
@@ -63,6 +72,7 @@ uint8_t minuto;
 uint8_t segundo;
 
 String inputString;
+String inputCount;
 long inputInt;
 
 String myFilePath = "/count.txt";
@@ -82,6 +92,7 @@ void grava_dado_nvs(uint32_t dado);
 uint32_t le_dado_nvs(void);
 void IRAM_ATTR funcao_ISR();
 void TASK_Check_Reset_Button(void *p);
+void set_Count_Value();
 
 //Objetos
 LiquidCrystal_I2C lcd(0x27, 20, 4);
@@ -94,25 +105,25 @@ RTC_DS3231 rtc;
 void setup()
 {
   Serial.begin(9600); 
-  //Wire.setClock(10000);
+  Wire.setClock(10000);
 
-  time1 = millis();
+  time_Serial = millis();
+  time_Loop = millis();
   
-//  le_dado_nvs();
-//  lcd.init();
-//  lcd.backlight();  
-//  split_Number(count);  
-//  lcd.createChar(0, LT);
-//  lcd.createChar(1, UB);
-//  lcd.createChar(2, RT);
-//  lcd.createChar(3, LL);
-//  lcd.createChar(4, LB);
-//  lcd.createChar(5, LR);
-//  lcd.createChar(6, UMB);
-//  lcd.createChar(7, LMB);
+  le_dado_nvs();
+  lcd.init();
+  lcd.backlight();  
+  split_Number(count);  
+  lcd.createChar(0, LT);
+  lcd.createChar(1, UB);
+  lcd.createChar(2, RT);
+  lcd.createChar(3, LL);
+  lcd.createChar(4, LB);
+  lcd.createChar(5, LR);
+  lcd.createChar(6, UMB);
+  lcd.createChar(7, LMB);
   
-  pinMode(SENSOR, INPUT_PULLUP);
-  pinMode(RESET_BUTTON, INPUT);     
+  pinMode(SENSOR, INPUT_PULLUP);  
 
   //check_wifi();
   //check_RTC();
@@ -122,71 +133,40 @@ void setup()
    disableCore0WDT();
 
   xTaskCreatePinnedToCore(
-      TASK_Check_Reset_Button,   /*função que implementa a tarefa */
-      "TASK_Check_Reset_Button", /*nome da tarefa */
+      TASK_Send_Serial_Count,   /*função que implementa a tarefa */
+      "TASK_Send_Serial_Count", /*nome da tarefa */
       10000,                     /*número de palavras a serem alocadas para uso com a pilha da tarefa */
       NULL,                      /*parâmetro de entrada para a tarefa (pode ser NULL) */
       1,                         /*prioridade da tarefa (0 a N) */
       NULL,                      /*referência para a tarefa (pode ser NULL) */
       1);                        /*Núcleo que executará a tarefa */
 
-  xTaskCreatePinnedToCore(
-      TASK_LCD_Begin,            /*função que implementa a tarefa */
-      "TASK_LCD_Begin",          /*nome da tarefa */
-      10000,                     /*número de palavras a serem alocadas para uso com a pilha da tarefa */
-      NULL,                      /*parâmetro de entrada para a tarefa (pode ser NULL) */
-      2,                         /*prioridade da tarefa (0 a N) */
-      NULL,                      /*referência para a tarefa (pode ser NULL) */
-      1);      
-
+    time_Serial = millis();
+    
+    Serial.println("");
 }
 
-void TASK_Check_Reset_Button(void *p)
-{
-  /* Botão de reset do sistema */
+void TASK_Send_Serial_Count(void *p)
+{  
   for (;;)
   {    
-    if(digitalRead(RESET_BUTTON)== HIGH)
+    if((millis() - time_Serial) > TEMPO)
     {
-        ESP.restart();  
+        Serial.println("i" + String(count) + "f");        
+        time_Serial = millis();
     }
     
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-    
-  }
-}
-
-void TASK_LCD_Begin(void *p)
-{
-  /* Reseta o LCD */
-  for (;;)
-  {    
-    if(millis() - time1 > 1000)
-    {
-      time1 = millis();
-      //Wire.setClock(10000);
-      lcd.init();
-      lcd.backlight(); 
-      lcd.clear(); 
-      split_Number(count);  
-      lcd.createChar(0, LT);
-      lcd.createChar(1, UB);
-      lcd.createChar(2, RT);
-      lcd.createChar(3, LL);
-      lcd.createChar(4, LB);
-      lcd.createChar(5, LR);
-      lcd.createChar(6, UMB);
-      lcd.createChar(7, LMB);
-    } 
-       
-    vTaskDelay(250 / portTICK_PERIOD_MS);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
     
   }
 }
 
 void loop()
 {
-  get_Keypad_Buttons();  
+  if((millis() - time_Loop) > DELAY)
+  {
+    time_Loop = millis();
+    get_Keypad_Buttons();  
 
  if(validar_Entrada_Manual == false)
  {
@@ -197,13 +177,14 @@ void loop()
 
   count_Sensor();
  }
+}  
 }
 
 void menu_Entrada_Manual()
 {
 
   if(menu_return == true)
-    {  
+    {        
       //Wire.setClock(10000); 
       lcd.clear();   
       lcd.setCursor(0, 1);
@@ -232,8 +213,7 @@ void menu_Entrada_Manual()
 }
   
 void menu_Voltar()
-{ 
-  //Wire.setClock(10000);
+{   
   lcd.clear();
   inputString = "";
   count = 0;
@@ -246,12 +226,10 @@ void menu_Enviar(String value)
 {
   if (validar_Entrada_Manual && inputString != "")
   {
-    //Wire.setClock(10000);
+    String teste = "";    
     lcd.setCursor(0, 2);
-    lcd.print("");
-    //Serial.print("M");
-    Serial.print(inputString);    
-    Serial.println(value);
+    lcd.print("");   
+    Serial.println(String(inputString) + ";" + String(value) + ";" + String(MAC_ADDRESS));     
     b_high = false;    
     lcd.clear();    
     split_Number(count);      
@@ -261,16 +239,13 @@ void menu_Enviar(String value)
     grava_dado_nvs(count);  
     validar_Entrada_Manual = false;  
     menu_Entrada_Manual();
-    delay(150);  
+    //delay(150);  
   }
   else if (count > 0 && !validar_Entrada_Manual)
-  {
-    //Wire.setClock(10000);
+  {    
     lcd.setCursor(0, 2);
-    lcd.print("");    
-    //Serial.print("S");    
-    Serial.print(count);
-    Serial.println(value);
+    lcd.print("");        
+    Serial.println(String(count) + ";" + String(value) + ";" + String(MAC_ADDRESS));       
     b_high = false;    
     //send_POST('S', count);
     count = 0;
@@ -279,7 +254,7 @@ void menu_Enviar(String value)
     lcd.clear();    
     split_Number(count);
     //validar_Entrada_Manual = true;      
-    delay(150);    
+    //delay(150);    
   }
   else
   {
@@ -305,8 +280,7 @@ void count_Sensor()
   }
 
   if (!digitalRead(SENSOR) && s_high == true)
-  {
-    //Wire.setClock(10000);
+  {    
     s_high = false;
     count++;
     lcd.clear();  // Limpa o display   
@@ -318,6 +292,8 @@ void count_Sensor()
 
 void armazena_Digito_Manual(char digit)
 {
+  
+  
   if (validar_Entrada_Manual)
   {
     if (inputString.length() <= 3)
@@ -330,6 +306,37 @@ void armazena_Digito_Manual(char digit)
       menu_Entrada_Manual();
     }
   }
+}
+
+void Count_Value()
+{    
+  if(insert_count)
+  {    
+      lcd.clear();   
+      lcd.setCursor(0, 1);
+      lcd.print("INICIAR CONTAGEM EM:");
+      lcd.setCursor(8, 2);
+      lcd.print(inputCount); 
+  }
+  else
+  {
+    count = inputCount.toInt();
+    inputCount = "";
+    lcd.clear();  // Limpa o display   
+    split_Number(count);
+    grava_dado_nvs(count);  
+    
+  }
+}
+
+void set_Count_Value(char digit)
+{
+        if (inputCount.length() <= 3)
+        {
+      lcd.setCursor(13, 1);
+          inputCount += digit;      
+        }   
+  
 }
 
 void get_Keypad_Buttons()
@@ -360,53 +367,140 @@ void get_Keypad_Buttons()
       }      
         break;
 
-      case 'D':
-        //menu_Enviar();
+      case 'D':         
+        if(!menu_return)
+        {
+          insert_count = !insert_count;
+          Count_Value(); 
+        }              
         break;
 
       case '0':
-        armazena_Digito_Manual('0');
+        if(insert_count)
+        {
+          set_Count_Value('0');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('0');
+        }
         break;
 
       case '1':
-        armazena_Digito_Manual('1');
+        if(insert_count)
+        {
+          set_Count_Value('1');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('1');
+        }
         break;
 
-      case '2':
-        armazena_Digito_Manual('2');
+      case '2':        
+        if(insert_count)
+        {
+          set_Count_Value('2');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('2');
+        }        
         break;
 
       case '3':
-        armazena_Digito_Manual('3');
+        if(insert_count)
+        {
+          set_Count_Value('3');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('3');
+        }
         break;
 
       case '4':
-        armazena_Digito_Manual('4');
+        if(insert_count)
+        {
+          set_Count_Value('4');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('4');
+        }
         break;
 
       case '5':
-        armazena_Digito_Manual('5');
+        if(insert_count)
+        {
+          set_Count_Value('5');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('5');
+        }
         break;
 
       case '6':
-        armazena_Digito_Manual('6');
+        if(insert_count)
+        {
+          set_Count_Value('6');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('6');
+        }
         break;
 
       case '7':
-        armazena_Digito_Manual('7');
+        if(insert_count)
+        {
+          set_Count_Value('7');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('7');
+        }
         break;
 
       case '8':
-        armazena_Digito_Manual('8');
+        if(insert_count)
+        {
+          set_Count_Value('8');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('8');
+        }
         break;
 
       case '9':
-        armazena_Digito_Manual('9');
+        if(insert_count)
+        {
+          set_Count_Value('9');
+          Count_Value(); 
+        }
+        else
+        {
+          armazena_Digito_Manual('9');
+        }
         break;
         
-      case '*':
-      menu_return = !menu_return;
-      menu_Entrada_Manual();
+      case '*':      
+      if(!insert_count)
+      {
+        menu_return = !menu_return;
+        menu_Entrada_Manual();
+      }      
       break;
 
       case '#':
@@ -861,6 +955,7 @@ void check_wifi()
   Serial.println(""); 
    Serial.println(""); 
    WiFi.begin(ssid, password);
+   Serial.println(WiFi.macAddress());
    Serial.println("----------------------------------------");  
    Serial.print("Conectando a rede ");
    Serial.println(ssid);
